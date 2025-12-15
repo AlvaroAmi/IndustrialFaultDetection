@@ -12,6 +12,7 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
+import requests
 
 DATA_PATH = pathlib.Path("data/Industrial_fault_detection.csv")
 PROCESS_VARS: List[str] = [
@@ -21,6 +22,21 @@ PROCESS_VARS: List[str] = [
     "Flow_Rate",
     "Current",
     "Voltage",]
+BENTO_URL = "http://127.0.0.1:3000"   # API pretrained
+FEATURES: List[str] = [
+    "Temperature","Vibration","Pressure","Flow_Rate","Current","Voltage",
+    "FFT_Temp_0","FFT_Vib_0","FFT_Pres_0",
+    "FFT_Temp_1","FFT_Vib_1","FFT_Pres_1",
+    "FFT_Temp_2","FFT_Vib_2","FFT_Pres_2",
+    "FFT_Temp_3","FFT_Vib_3","FFT_Pres_3",
+    "FFT_Temp_4","FFT_Vib_4","FFT_Pres_4",
+    "FFT_Temp_5","FFT_Vib_5","FFT_Pres_5",
+    "FFT_Temp_6","FFT_Vib_6","FFT_Pres_6",
+    "FFT_Temp_7","FFT_Vib_7","FFT_Pres_7",
+    "FFT_Temp_8","FFT_Vib_8","FFT_Pres_8",
+    "FFT_Temp_9","FFT_Vib_9","FFT_Pres_9",
+]
+
 
 def load_data() -> pd.DataFrame:
     df = pd.read_csv(DATA_PATH)
@@ -326,6 +342,57 @@ def render_modelado(df: pd.DataFrame) -> None:
                 )
                 st.plotly_chart(fig_imp, width="stretch")
 
+# Obtiene la lista de modelos disponibles desde la API BentoML
+@st.cache_data(ttl=10)
+def fetch_available_models() -> list[str]:
+    r = requests.post(f"{BENTO_URL}/info", json={}, timeout=10)
+    r.raise_for_status()
+    info = r.json()
+    return info.get("available_models", [])
+
+def render_predict() -> None:
+    st.subheader("Predicción (API BentoML - pretrained)")
+
+    # Traer modelos disponibles desde la API
+    try:
+        available_models = fetch_available_models()
+        if not available_models:
+            st.error("La API no devolvió modelos disponibles en /info.")
+            return
+    except requests.RequestException as e:
+        st.error(f"No se pudo consultar /info en la API: {e}")
+        return
+
+    model_name = st.selectbox("Modelo (pretrained)", available_models, index=0)
+
+    st.markdown("### Introduce valores")
+    cols = st.columns(3)
+    values = []
+    for i, feat in enumerate(FEATURES):
+        with cols[i % 3]:
+            values.append(st.number_input(feat, value=0.0, format="%.6f"))
+
+    if st.button("Predecir con API", type="primary"):
+        payload = {
+            "api": "pretrained",
+            "model": model_name,
+            "data": [values],
+        }
+
+        try:
+            # si tu API espera wrapper "req" (según tu Swagger)
+            r = requests.post(f"{BENTO_URL}/predict", json={"req": payload}, timeout=20)
+            r.raise_for_status()
+            out = r.json()
+
+            pred = out.get("pred", [None])[0]
+            st.success(f"Predicción: {pred}")
+            st.json(out)
+
+        except requests.HTTPError:
+            st.error(f"HTTP {r.status_code}: {r.text}")
+        except requests.RequestException as e:
+            st.error(f"Error llamando a BentoML: {e}")
 
 def main() -> None:
     st.set_page_config(page_title="Industrial Fault Detection", layout="wide")
@@ -335,13 +402,15 @@ def main() -> None:
 
     seccion = st.sidebar.radio(
         "Secciones",
-        ["Exploración de datos", "Modelado"],
+        ["Exploración de datos", "Modelado", "Predicción"],
     )
 
     if seccion == "Exploración de datos":
         render_exploracion(df)
     elif seccion == "Modelado":
         render_modelado(df)
+    elif seccion == "Predicción":
+        render_predict()
 
 
 if __name__ == "__main__":
