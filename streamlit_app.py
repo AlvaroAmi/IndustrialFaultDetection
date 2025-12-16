@@ -291,7 +291,9 @@ def render_modelado(df: pd.DataFrame) -> None:
             st.error("Modelo no soportado")
             return
 
-    if st.button("Entrenar y evaluar", type="primary"):
+    button_container = st.container(horizontal=True)
+    
+    if button_container.button("Entrenar y evaluar", type="primary"):
         X_train, X_test, y_train, y_test = train_test_split(
             X,y,
             test_size=test_size,
@@ -304,17 +306,53 @@ def render_modelado(df: pd.DataFrame) -> None:
         acc = accuracy_score(y_test, y_pred)
         f1_w = f1_score(y_test, y_pred, average="weighted")
 
-        col_m1, col_m2 = st.columns(2)
-        col_m1.metric("Accuracy", f"{acc:.3f}")
-        col_m2.metric("F1 ponderado", f"{f1_w:.3f}")
+        # Store results in session state
+        st.session_state.model_results = {
+            "model": model,
+            "model_name": model_name,
+            "acc": acc,
+            "f1_w": f1_w,
+            "report": classification_report(y_test, y_pred, output_dict=True, zero_division=0),
+            "y_test": y_test,
+            "y_pred": y_pred,
+            "X": X,
+        }
 
-        report = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
-        report_df = pd.DataFrame(report).T.round(3)
+    if "model_results" in st.session_state:
+        if button_container.button("Guardar modelo entrenado", type="secondary"):
+            import joblib
+            from pathlib import Path
+            import bentoml
+            import unicodedata
+
+            MODELS_DIR = Path("artifacts/models_custom")
+            MODELS_DIR.mkdir(parents=True, exist_ok=True)
+            model_name_normalized = unicodedata.normalize('NFKD', model_name.lower()).encode('ASCII', 'ignore').decode('ASCII').replace(' ', '_')
+            print(model_name_normalized)
+            model_file = MODELS_DIR / f"{model_name_normalized}_custom.joblib"
+            joblib.dump(model, model_file)
+
+            bento_model = bentoml.sklearn.save_model(
+                f"fault_{model_name_normalized}_custom",
+                model,
+                metadata={"model_name": model_name, "custom_trained": "yes"}
+            )
+            st.success(f"Modelo guardado en BentoML: {st.session_state.model_results['model_name']} (simulado)")
+
+    # Display results if they exist in session state
+    if "model_results" in st.session_state:
+        results = st.session_state.model_results
+        
+        col_m1, col_m2 = st.columns(2)
+        col_m1.metric("Accuracy", f"{results['acc']:.3f}")
+        col_m2.metric("F1 ponderado", f"{results['f1_w']:.3f}")
+
+        report_df = pd.DataFrame(results["report"]).T.round(3)
         st.markdown("**Métricas por clase**")
         st.dataframe(report_df, width="stretch")
 
-        labels = sorted(y.unique())
-        cm = confusion_matrix(y_test, y_pred, labels=labels)
+        labels = sorted(results["y_test"].unique())
+        cm = confusion_matrix(results["y_test"], results["y_pred"], labels=labels)
         cm_df = pd.DataFrame(cm, index=[f"Real {c}" for c in labels], columns=[f"Pred {c}" for c in labels])
         fig_cm = px.imshow(
             cm_df,
@@ -325,11 +363,11 @@ def render_modelado(df: pd.DataFrame) -> None:
         )
         st.plotly_chart(fig_cm, width="stretch")
 
-        if model_name in {"Random Forest", "Gradient Boosting", "XGBoost", "LightGBM"}:
-            importances = getattr(model, "feature_importances_", None)
+        if results["model_name"] in {"Random Forest", "Gradient Boosting", "XGBoost", "LightGBM"}:
+            importances = getattr(results["model"], "feature_importances_", None)
             if importances is not None:
                 imp_df = (
-                    pd.DataFrame({"feature": X.columns, "importance": importances})
+                    pd.DataFrame({"feature": results["X"].columns, "importance": importances})
                     .sort_values("importance", ascending=False)
                     .head(10)
                 )
@@ -362,8 +400,14 @@ def render_predict() -> None:
     except requests.RequestException as e:
         st.error(f"No se pudo consultar /info en la API: {e}")
         return
+    
+    model_type = st.radio("Selecciona modelo y valores para predecir:", 
+                          options=["Pretrained", "Custom"], 
+                          index=0, 
+                          key="predict_mode", 
+                          horizontal=True)
 
-    model_name = st.selectbox("Modelo (pretrained)", available_models, index=0)
+    model_name = st.selectbox(f"Modelo {model_type}", available_models, index=0)
 
     st.markdown("### Introduce valores")
     cols = st.columns(3)
@@ -380,7 +424,6 @@ def render_predict() -> None:
         }
 
         try:
-            # si tu API espera wrapper "req" (según tu Swagger)
             r = requests.post(f"{BENTO_URL}/predict", json={"req": payload}, timeout=20)
             r.raise_for_status()
             out = r.json()
