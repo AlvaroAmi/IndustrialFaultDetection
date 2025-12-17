@@ -1,2 +1,0 @@
-python -m streamlit run streamlit_app.py
-bentoml serve bentoml_default_api.service:FaultPredictionService --port 3000
