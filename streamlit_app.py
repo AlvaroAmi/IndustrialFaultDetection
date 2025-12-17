@@ -328,16 +328,19 @@ def render_modelado(df: pd.DataFrame) -> None:
 
             MODELS_DIR = Path("artifacts/models_custom")
             MODELS_DIR.mkdir(parents=True, exist_ok=True)
-            model_name_normalized = unicodedata.normalize('NFKD', model_name.lower()).encode('ASCII', 'ignore').decode('ASCII').replace(' ', '_')
+            model_name_normalized = unicodedata.normalize('NFKD', st.session_state.model_results["model_name"].lower()).encode('ASCII', 'ignore').decode('ASCII')\
+                .replace(' ', '_').replace('(', '').replace(')', '')
+            
             print(model_name_normalized)
             model_file = MODELS_DIR / f"{model_name_normalized}_custom.joblib"
-            joblib.dump(model, model_file)
+            joblib.dump(st.session_state.model_results["model"], model_file)
 
             bento_model = bentoml.sklearn.save_model(
                 f"fault_{model_name_normalized}_custom",
-                model,
-                metadata={"model_name": model_name, "custom_trained": "yes"}
+                st.session_state.model_results["model"],
+                metadata={"model_name": model_name_normalized, "model_type": "custom"}
             )
+
             st.success(f"Modelo guardado en BentoML: {st.session_state.model_results['model_name']} (simulado)")
 
     # Display results if they exist in session state
@@ -383,11 +386,17 @@ def render_modelado(df: pd.DataFrame) -> None:
 
 # Obtiene la lista de modelos disponibles desde la API BentoML
 @st.cache_data(ttl=10)
-def fetch_available_models() -> list[str]:
-    r = requests.post(f"{BENTO_URL}/info", json={}, timeout=10)
+def fetch_available_pretrained_models() -> list[str]:
+    r = requests.post(f"{BENTO_URL}/info", json={"model_type": "pretrained"}, timeout=10)
     r.raise_for_status()
     info = r.json()
-    return info.get("available_models", [])
+    return info.get("available_models", []), info.get("default_model", "")
+
+def fetch_available_custom_models() -> list[str]:
+    r = requests.post(f"{BENTO_URL}/info", json={"model_type": "custom"}, timeout=10)
+    r.raise_for_status()
+    info = r.json()
+    return info.get("available_models", []), info.get("default_model", "")
 
 def render_predict() -> None:
     st.header("Prediccion de fallos industriales")
@@ -397,17 +406,9 @@ def render_predict() -> None:
     necesario proporcionar las 36 caracteristicas (temperatura, vibracion, etc.).
     """)
     st.info("Es preciso asegurar que el servidor BentoML esta siendo ejecutado en el puerto 3000.")
-
-    # Traer modelos disponibles desde la API
-    try:
-        available_models = fetch_available_models()
-        if not available_models:
-            st.error("La API no devolvio modelos disponibles. Verificar que BentoML este activo.")
-            return
-    except requests.RequestException as e:
-        st.error(f"Error conectando a la API: {e}")
-        return
     
+    
+
     with st.container():
         st.subheader("Configuracion del Modelo")
         st.markdown(""" 
@@ -415,54 +416,68 @@ def render_predict() -> None:
         defecto para realizar las predicciones; asimismo, custom se corresponden con los últimos 
         modelos personalmente entrenados por el usuario. 
         """)
-        model_type = st.radio("Tipo de modelo:", 
-                              options=["Pretrained", "Custom"], 
-                              index=0, 
-                              key="predict_mode", 
-                              horizontal=True)
+
+        model_type = st.radio("Selecciona modelo y valores para predecir:", 
+                            options=["Pretrained", "Custom"], 
+                            index=0, 
+                            key="predict_mode", 
+                            horizontal=True)
         
-        model_name = st.selectbox(f"Selecciona modelo {model_type.lower()}:", available_models, index=0)
+            
+        # Traer modelos disponibles desde la API
+        try:
+            available_models, default_model = fetch_available_pretrained_models() if model_type == "Pretrained" else fetch_available_custom_models()
+        except requests.RequestException as e:
+            st.error(f"No se pudo consultar /info en la API: {e}")
+            return
+
+        default_index = available_models.index(default_model) if default_model in available_models else 0
+        model_name = st.selectbox(f"Modelo {model_type}", available_models, index=default_index, placeholder="No hay modelos disponibles")
+
+        if not model_name:
+            return
+        
 
     with st.container():
-        st.subheader("Entrada de Datos")
-        input_method = st.radio(
-            "Metodo de entrada:",
-            ("Subir CSV", "Subir JSON", "Manual"),
-            index=0,
-        )
+            st.subheader("Entrada de Datos")
+            input_method = st.radio(
+                "Metodo de entrada:",
+                ("Subir CSV", "Subir JSON", "Manual"),
+                index=0,
+            )
 
-        data = None
-        if input_method == "Manual":
-            st.markdown("### Introduccion Manual")
-            st.caption("Ingresa valores para cada sensor (usa decimales si es necesario).")
-            cols = st.columns(6)
-            values = []
-            for i, feat in enumerate(FEATURES):
-                with cols[i % 6]:
-                    values.append(st.number_input(feat, value=0.0, format="%.6f", step=0.01))
-            data = values
-        elif input_method == "Subir CSV":
-            st.markdown("### Subir Archivo CSV")
-            st.caption("El archivo debe tener exactamente 36 columnas (una fila de datos).")
-            uploaded_csv = st.file_uploader("Selecciona un archivo CSV", type="csv")
-            if uploaded_csv is not None:
-                df = pd.read_csv(uploaded_csv)
-                if len(df.columns) == 36 and len(df) >= 1:
-                    data = df.iloc[0].values.tolist()
-                    st.success("Datos cargados correctamente del CSV.")
-                else:
-                    st.error("El CSV debe tener 36 columnas y al menos 1 fila.")
-        elif input_method == "Subir JSON":
-            st.markdown("### Subir Archivo JSON")
-            st.caption("El JSON debe ser un objeto con 36 claves (ej: {\"Temperature\": 25.5, ...}).")
-            uploaded_json = st.file_uploader("Selecciona un archivo JSON", type="json")
-            if uploaded_json is not None:
-                json_data = json.load(uploaded_json)
-                if isinstance(json_data, dict) and len(json_data) == 36:
-                    data = [json_data.get(feature, 0.0) for feature in FEATURES]
-                    st.success("Datos cargados correctamente del JSON.")
-                else:
-                    st.error("El JSON debe ser un objeto con exactamente 36 claves.")
+            data = None
+            if input_method == "Manual":
+                st.markdown("### Introduccion Manual")
+                st.caption("Ingresa valores para cada sensor (usa decimales si es necesario).")
+                cols = st.columns(6)
+                values = []
+                for i, feat in enumerate(FEATURES):
+                    with cols[i % 6]:
+                        values.append(st.number_input(feat, value=0.0, format="%.6f", step=0.01))
+                data = values
+            elif input_method == "Subir CSV":
+                st.markdown("### Subir Archivo CSV")
+                st.caption("El archivo debe tener exactamente 36 columnas (una fila de datos).")
+                uploaded_csv = st.file_uploader("Selecciona un archivo CSV", type="csv")
+                if uploaded_csv is not None:
+                    df = pd.read_csv(uploaded_csv)
+                    if len(df.columns) == 36 and len(df) >= 1:
+                        data = df.iloc[0].values.tolist()
+                        st.success("Datos cargados correctamente del CSV.")
+                    else:
+                        st.error("El CSV debe tener 36 columnas y al menos 1 fila.")
+            elif input_method == "Subir JSON":
+                st.markdown("### Subir Archivo JSON")
+                st.caption("El JSON debe ser un objeto con 36 claves (ej: {\"Temperature\": 25.5, ...}).")
+                uploaded_json = st.file_uploader("Selecciona un archivo JSON", type="json")
+                if uploaded_json is not None:
+                    json_data = json.load(uploaded_json)
+                    if isinstance(json_data, dict) and len(json_data) == 36:
+                        data = [json_data.get(feature, 0.0) for feature in FEATURES]
+                        st.success("Datos cargados correctamente del JSON.")
+                    else:
+                        st.error("El JSON debe ser un objeto con exactamente 36 claves.")
 
     with st.container():
         st.subheader("Realizar Prediccion")
@@ -470,7 +485,7 @@ def render_predict() -> None:
             if data and len(data) == 36:
                 with st.spinner("Procesando prediccion..."):
                     payload = {
-                        "api": "pretrained",
+                        "api": model_type.lower(),
                         "model": model_name,
                         "data": [data],
                     }
@@ -488,6 +503,7 @@ def render_predict() -> None:
                         st.error(f"Error de conexion: {e}")
             else:
                 st.warning("Proporciona datos validos para las 36 caracteristicas antes de predecir.")
+
 
 def main() -> None:
     st.set_page_config(page_title="Industrial Fault Detection", layout="wide")

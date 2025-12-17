@@ -26,6 +26,6 @@ for name, path in MODEL_FILES.items():
     bento_model = bentoml.sklearn.save_model(
         f"fault_{name}",
         model,
-        metadata={"model_name": name}
+        metadata={"model_name": name, "model_type": "pretrained"},
     )
     print("Guardado en BentoML:", bento_model.tag)
