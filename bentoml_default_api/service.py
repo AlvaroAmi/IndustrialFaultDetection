@@ -20,7 +20,7 @@ PRETRAINED_MODEL_TAGS = {
 
 
 class PredictRequest(BaseModel):
-    api: str = Field(description="Debe ser 'pretrained' para usar esta API")
+    api: str = Field(description="Debe ser 'pretrained' o 'custom' para usar esta API")
     model: Optional[str] = Field(default=None)
     data: List[List[float]] = Field(
         examples=[[[0.0] * N_FEATURES]],
@@ -39,8 +39,8 @@ class InfoResponse(BaseModel):
     default_model: str
 
 
-@bentoml.service(name="industrial_fault_classifier_pretrained")
-class FaultPretrainedService:
+@bentoml.service(name="industrial_fault_classifier")
+class FaultPredictionService:
     def __init__(self) -> None:
         # Cargar todos los modelos preentrenados disponibles
         self.pretrained_models: Dict[str, Any] = {}
