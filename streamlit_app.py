@@ -1,4 +1,5 @@
 import pathlib
+import json
 from typing import List
 import pandas as pd
 import plotly.express as px
@@ -389,53 +390,104 @@ def fetch_available_models() -> list[str]:
     return info.get("available_models", [])
 
 def render_predict() -> None:
-    st.subheader("Predicción (API BentoML - pretrained)")
+    st.header("Prediccion de fallos industriales")
+    st.markdown(""" 
+    En esta página puede realizarse la predicción de un nuevo conjuto de datos, bien haciendo 
+    uso de modelos de machine learning preentrenados o los últimos modelos particulares entrenados. Es 
+    necesario proporcionar las 36 caracteristicas (temperatura, vibracion, etc.).
+    """)
+    st.info("Es preciso asegurar que el servidor BentoML esta siendo ejecutado en el puerto 3000.")
 
     # Traer modelos disponibles desde la API
     try:
         available_models = fetch_available_models()
         if not available_models:
-            st.error("La API no devolvió modelos disponibles en /info.")
+            st.error("La API no devolvio modelos disponibles. Verificar que BentoML este activo.")
             return
     except requests.RequestException as e:
-        st.error(f"No se pudo consultar /info en la API: {e}")
+        st.error(f"Error conectando a la API: {e}")
         return
     
-    model_type = st.radio("Selecciona modelo y valores para predecir:", 
-                          options=["Pretrained", "Custom"], 
-                          index=0, 
-                          key="predict_mode", 
-                          horizontal=True)
+    with st.container():
+        st.subheader("Configuracion del Modelo")
+        st.markdown(""" 
+        Pretrained se refiere a los modelos de machine learning preentrenados que se ofrecen por 
+        defecto para realizar las predicciones; asimismo, custom se corresponden con los últimos 
+        modelos personalmente entrenados por el usuario. 
+        """)
+        model_type = st.radio("Tipo de modelo:", 
+                              options=["Pretrained", "Custom"], 
+                              index=0, 
+                              key="predict_mode", 
+                              horizontal=True)
+        
+        model_name = st.selectbox(f"Selecciona modelo {model_type.lower()}:", available_models, index=0)
 
-    model_name = st.selectbox(f"Modelo {model_type}", available_models, index=0)
+    with st.container():
+        st.subheader("Entrada de Datos")
+        input_method = st.radio(
+            "Metodo de entrada:",
+            ("Subir CSV", "Subir JSON", "Manual"),
+            index=0,
+        )
 
-    st.markdown("### Introduce valores")
-    cols = st.columns(3)
-    values = []
-    for i, feat in enumerate(FEATURES):
-        with cols[i % 3]:
-            values.append(st.number_input(feat, value=0.0, format="%.6f"))
+        data = None
+        if input_method == "Manual":
+            st.markdown("### Introduccion Manual")
+            st.caption("Ingresa valores para cada sensor (usa decimales si es necesario).")
+            cols = st.columns(6)
+            values = []
+            for i, feat in enumerate(FEATURES):
+                with cols[i % 6]:
+                    values.append(st.number_input(feat, value=0.0, format="%.6f", step=0.01))
+            data = values
+        elif input_method == "Subir CSV":
+            st.markdown("### Subir Archivo CSV")
+            st.caption("El archivo debe tener exactamente 36 columnas (una fila de datos).")
+            uploaded_csv = st.file_uploader("Selecciona un archivo CSV", type="csv")
+            if uploaded_csv is not None:
+                df = pd.read_csv(uploaded_csv)
+                if len(df.columns) == 36 and len(df) >= 1:
+                    data = df.iloc[0].values.tolist()
+                    st.success("Datos cargados correctamente del CSV.")
+                else:
+                    st.error("El CSV debe tener 36 columnas y al menos 1 fila.")
+        elif input_method == "Subir JSON":
+            st.markdown("### Subir Archivo JSON")
+            st.caption("El JSON debe ser un objeto con 36 claves (ej: {\"Temperature\": 25.5, ...}).")
+            uploaded_json = st.file_uploader("Selecciona un archivo JSON", type="json")
+            if uploaded_json is not None:
+                json_data = json.load(uploaded_json)
+                if isinstance(json_data, dict) and len(json_data) == 36:
+                    data = [json_data.get(feature, 0.0) for feature in FEATURES]
+                    st.success("Datos cargados correctamente del JSON.")
+                else:
+                    st.error("El JSON debe ser un objeto con exactamente 36 claves.")
 
-    if st.button("Predecir con API", type="primary"):
-        payload = {
-            "api": "pretrained",
-            "model": model_name,
-            "data": [values],
-        }
-
-        try:
-            r = requests.post(f"{BENTO_URL}/predict", json={"req": payload}, timeout=20)
-            r.raise_for_status()
-            out = r.json()
-
-            pred = out.get("pred", [None])[0]
-            st.success(f"Predicción: {pred}")
-            st.json(out)
-
-        except requests.HTTPError:
-            st.error(f"HTTP {r.status_code}: {r.text}")
-        except requests.RequestException as e:
-            st.error(f"Error llamando a BentoML: {e}")
+    with st.container():
+        st.subheader("Realizar Prediccion")
+        if st.button("Predecir Fallo", type="primary", key="predict_button", use_container_width=True):
+            if data and len(data) == 36:
+                with st.spinner("Procesando prediccion..."):
+                    payload = {
+                        "api": "pretrained",
+                        "model": model_name,
+                        "data": [data],
+                    }
+                    try:
+                        r = requests.post(f"{BENTO_URL}/predict", json={"req": payload}, timeout=20)
+                        r.raise_for_status()
+                        out = r.json()
+                        pred = out.get("pred", [None])[0]
+                        st.success(f"Prediccion exitosa: Tipo de fallo {pred}")
+                        with st.expander("Ver detalles de la respuesta"):
+                            st.json(out)
+                    except requests.HTTPError as e:
+                        st.error(f"Error HTTP {r.status_code}: {r.text}")
+                    except requests.RequestException as e:
+                        st.error(f"Error de conexion: {e}")
+            else:
+                st.warning("Proporciona datos validos para las 36 caracteristicas antes de predecir.")
 
 def main() -> None:
     st.set_page_config(page_title="Industrial Fault Detection", layout="wide")
