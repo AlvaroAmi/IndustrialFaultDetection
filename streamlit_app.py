@@ -469,13 +469,13 @@ def render_predict() -> None:
     with st.container():
         st.subheader("Configuracion del Modelo")
         st.markdown(""" 
-        Pretrained se refiere a los modelos de machine learning preentrenados que se ofrecen por 
-        defecto para realizar las predicciones; asimismo, custom se corresponden con los últimos 
+        Preentrenado se refiere a los modelos de machine learning preentrenados que se ofrecen por 
+        defecto para realizar las predicciones; asimismo, Custom se corresponden con los últimos 
         modelos personalmente entrenados por el usuario. 
         """)
 
         model_type = st.radio("Selecciona modelo y valores para predecir:", 
-                            options=["Pretrained", "Custom"], 
+                            options=["Preentrenado", "Custom"], 
                             index=0, 
                             key="predict_mode", 
                             horizontal=True)
@@ -483,7 +483,7 @@ def render_predict() -> None:
             
         # Traer modelos disponibles desde la API
         try:
-            available_models, default_model = fetch_available_pretrained_models() if model_type == "Pretrained" else fetch_available_custom_models()
+            available_models, default_model = fetch_available_pretrained_models() if model_type == "Preentrenado" else fetch_available_custom_models()
         except requests.RequestException as e:
             st.error(f"No se pudo consultar /info en la API: {e}")
             return
@@ -542,7 +542,7 @@ def render_predict() -> None:
             if data and len(data) == 36:
                 with st.spinner("Procesando prediccion..."):
                     payload = {
-                        "api": model_type.lower(),
+                        "api": "pretrained" if model_type == "Preentrenado" else "custom",
                         "model": model_name,
                         "data": [data],
                     }
