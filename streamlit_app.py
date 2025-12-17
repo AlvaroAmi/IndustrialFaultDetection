@@ -341,7 +341,7 @@ def render_modelado(df: pd.DataFrame) -> None:
                 metadata={"model_name": model_name_normalized, "model_type": "custom"}
             )
 
-            st.success(f"Modelo guardado en BentoML: {st.session_state.model_results['model_name']}")
+            st.success(f"Modelo guardado en BentoML: {st.session_state.model_results['model_name']} como {bento_model.tag}")
 
     # Display results if they exist in session state
     if "model_results" in st.session_state:
@@ -385,7 +385,7 @@ def render_modelado(df: pd.DataFrame) -> None:
                 st.plotly_chart(fig_imp, width="stretch")
 
 # Obtiene la lista de modelos disponibles desde la API BentoML
-@st.cache_data(ttl=10)
+@st.cache_data
 def fetch_available_pretrained_models() -> list[str]:
     r = requests.post(f"{BENTO_URL}/info", json={"model_type": "pretrained"}, timeout=10)
     r.raise_for_status()
