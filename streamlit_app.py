@@ -341,7 +341,7 @@ def render_modelado(df: pd.DataFrame) -> None:
                 metadata={"model_name": model_name_normalized, "model_type": "custom"}
             )
 
-            st.success(f"Modelo guardado en BentoML: {st.session_state.model_results['model_name']} (simulado)")
+            st.success(f"Modelo guardado en BentoML: {st.session_state.model_results['model_name']}")
 
     # Display results if they exist in session state
     if "model_results" in st.session_state:
