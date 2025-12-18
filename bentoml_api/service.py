@@ -115,8 +115,7 @@ class FaultPredictionService:
 
             case _:
                 raise ValueError(f"API incorrecta. expected='pretrained' or 'custom' got='{req.api}'")
-        
-        print(f"Using model: {model}")
+
         preds = model.predict(X)
         
         # Try to get probabilities if the model supports it
