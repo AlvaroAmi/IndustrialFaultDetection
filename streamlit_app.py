@@ -6,14 +6,19 @@ import plotly.express as px
 import streamlit as st
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+from sklearn.metrics import (
+    accuracy_score, classification_report, confusion_matrix, f1_score,
+    precision_score, recall_score, roc_auc_score, roc_curve, auc
+)
 from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, label_binarize
 from sklearn.svm import SVC
 import requests
+import numpy as np
+import plotly.graph_objects as go
 
 DATA_PATH = pathlib.Path("data/Industrial_fault_detection.csv")
 PROCESS_VARS: List[str] = [
@@ -343,7 +348,6 @@ def render_modelado(df: pd.DataFrame) -> None:
 
             st.success(f"Modelo guardado en BentoML: {st.session_state.model_results['model_name']} (simulado)")
 
-    # Display results if they exist in session state
     if "model_results" in st.session_state:
         results = st.session_state.model_results
         
@@ -407,8 +411,17 @@ def render_predict() -> None:
     """)
     st.info("Es preciso asegurar que el servidor BentoML esta siendo ejecutado en el puerto 3000.")
     
+    tab1, tab2 = st.tabs(["Predicción", "Evaluación y Optimización"])
     
+    with tab1:
+        render_prediction_tab()
+    
+    with tab2:
+        render_evaluation_tab()
 
+
+def render_prediction_tab() -> None:
+    """Tab for making predictions with pretrained or custom models"""
     with st.container():
         st.subheader("Configuracion del Modelo")
         st.markdown(""" 
@@ -504,6 +517,356 @@ def render_predict() -> None:
             else:
                 st.warning("Proporciona datos validos para las 36 caracteristicas antes de predecir.")
 
+
+def render_evaluation_tab() -> None:
+    st.subheader("Evaluación y Optimización de Modelos")
+    st.markdown("""
+    Esta sección permite evaluar y comparar el rendimiento de los modelos creados.
+                
+    Se incluyen visualizaciones como matrices de confusión y curvas ROC para representar los resultados 
+    de forma visual, favoreciendo su interpretación. También se pueden hacer comparativas entre modelos.
+    """)
+    
+    # Load data
+    df = load_data()
+    X = df.drop(columns=["Fault_Type"])
+    y = df["Fault_Type"]
+    
+    st.markdown("### Configuración de Tipo de Modelos")
+    
+    model_type = st.radio(
+        "Tipo de modelos a evaluar:", 
+        options=["Pretrained", "Custom"], 
+        index=0, 
+        key="eval_model_type", 
+        horizontal=True
+    )
+    
+    #Utilizar la API para obtener modelos disponibles
+    try:
+        available_models, default_model = (
+            fetch_available_pretrained_models() if model_type == "Pretrained" 
+            else fetch_available_custom_models()
+        )
+    except requests.RequestException as e:
+        st.error(f"No se pudo consultar /info en la API de BentoML: {e}")
+        st.warning("Asegúrate de que el servidor BentoML esté ejecutándose en el puerto 3000")
+        return
+    
+    if not available_models:
+        st.warning(f"No hay modelos {model_type} disponibles en BentoML")
+        return
+    
+    st.markdown("### Selección de Modelos para Comparar")
+    st.caption(f"Selecciona uno o más modelos {model_type} de BentoML para evaluar y comparar")
+    
+    models_to_evaluate = st.multiselect(
+        "Modelos a evaluar",
+        available_models,
+        default=[available_models[0]] if len(available_models) > 0 else [],
+        key="models_to_evaluate"
+    )
+    
+    if not models_to_evaluate:
+        st.warning("Selecciona al menos un modelo para evaluar")
+        return
+    
+    st.markdown("### Configuración de Evaluación")
+    
+    # Opción para elegir el dataset de evaluación
+    data_source = st.radio(
+        "Fuente de datos para evaluación (se debe tener en cuenta que usar el dataset original evalua con datos de entrenamiento):",
+        ["Dataset original (split)", "Dataset original (completo)", "Subir CSV personalizado (recomendado)"],
+        index=0,
+        key="eval_data_source"
+    )
+    
+    custom_df = None
+    if data_source == "Dataset original (split)":
+        test_size = st.slider("Proporción test", 0.1, 0.5, 0.2, 0.05, key="eval_test_size")
+    elif data_source == "Subir CSV personalizado (recomendado)":
+        st.caption("El CSV debe tener las 36 características más la columna 'Fault_Type'")
+        uploaded_file = st.file_uploader(
+            "Selecciona archivo CSV de evaluación",
+            type="csv",
+            key="eval_csv_upload"
+        )
+        
+        if uploaded_file is not None:
+            try:
+                custom_df = pd.read_csv(uploaded_file)
+                
+                # Validar que tenga las columnas necesarias
+                required_cols = FEATURES + ["Fault_Type"]
+                missing_cols = [col for col in required_cols if col not in custom_df.columns]
+                
+                if missing_cols:
+                    st.error(f"El CSV no tiene todas las columnas requeridas. Faltan: {', '.join(missing_cols)}")
+                    custom_df = None
+                else:
+                    st.success(f"CSV cargado correctamente: {len(custom_df)} muestras")
+                    st.info(f"Clases en el dataset: {sorted(custom_df['Fault_Type'].unique())}")
+                    
+                    # Mostrar preview
+                    with st.expander("Ver preview del dataset"):
+                        st.dataframe(custom_df.head(), use_container_width=True)
+            except Exception as e:
+                st.error(f"Error al cargar el CSV: {e}")
+                custom_df = None
+        else:
+            st.info("Sube un archivo CSV para continuar")
+    
+    if st.button("Evaluar Modelos", type="primary", key="eval_button"):
+        # Preparar datos según la fuente seleccionada
+        if data_source == "Dataset original (completo)":
+            X_test = X
+            y_test = y
+            st.info(f"Evaluando con dataset completo: {len(y_test)} muestras")
+        elif data_source == "Dataset original (split)":
+            _, X_test, _, y_test = train_test_split(
+                X, y,
+                test_size=test_size,
+                random_state=67,
+                stratify=y
+            )
+            st.info(f"Evaluando con {len(y_test)} muestras de test (split {int(test_size*100)}%)")
+        elif data_source == "Subir CSV personalizado (recomendado)":
+            if custom_df is None:
+                st.warning("Por favor, sube un archivo CSV válido antes de evaluar")
+                return
+            X_test = custom_df[FEATURES]
+            y_test = custom_df["Fault_Type"]
+            st.info(f"Evaluando con dataset personalizado: {len(y_test)} muestras")
+        
+        results = {}
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for idx, model_name in enumerate(models_to_evaluate):
+            status_text.text(f"Evaluando {model_name}...")
+            
+            try:
+                data_list = X_test.values.tolist()
+                
+                payload = {
+                    "api": model_type.lower(),
+                    "model": model_name,
+                    "data": data_list,
+                }
+                
+                r = requests.post(
+                    f"{BENTO_URL}/predict", 
+                    json={"req": payload}, 
+                    timeout=60
+                )
+                r.raise_for_status()
+                out = r.json()
+                y_pred = np.array(out.get("pred", []))
+                
+                #Obtener las probabilidades si están disponibles
+                y_pred_proba = None
+                if "proba" in out and out["proba"] is not None:
+                    y_pred_proba = np.array(out["proba"])
+                
+                if len(y_pred) != len(y_test):
+                    st.error(f"Error: El modelo {model_name} devolvió {len(y_pred)} predicciones pero se esperaban {len(y_test)}")
+                    continue
+                
+                #Calcular las métricas
+                acc = accuracy_score(y_test, y_pred)
+                precision = precision_score(y_test, y_pred, average="weighted", zero_division=0)
+                recall = recall_score(y_test, y_pred, average="weighted", zero_division=0)
+                f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
+                
+                results[model_name] = {
+                    "accuracy": acc,
+                    "precision": precision,
+                    "recall": recall,
+                    "f1": f1,
+                    "y_test": y_test,
+                    "y_pred": y_pred,
+                    "y_pred_proba": y_pred_proba,
+                    "report": classification_report(y_test, y_pred, output_dict=True, zero_division=0)
+                }
+                
+            except requests.HTTPError as e:
+                st.error(f"Error HTTP al evaluar {model_name}: {e}")
+            except requests.RequestException as e:
+                st.error(f"Error de conexión al evaluar {model_name}: {e}")
+            except Exception as e:
+                st.error(f"Error inesperado al evaluar {model_name}: {e}")
+            
+            progress_bar.progress((idx + 1) / len(models_to_evaluate))
+        
+        if results:
+            status_text.text("Evaluación completada")
+            st.session_state.eval_results = results
+            st.session_state.eval_X_test = X_test
+        else:
+            status_text.text("No se pudo completar la evaluación")
+    
+
+    if "eval_results" in st.session_state:
+        results = st.session_state.eval_results
+        
+        st.markdown("---")
+        st.markdown("### Comparativa de Métricas")
+        st.caption("**Justificación de métricas:** Se utilizan Accuracy para medir el rendimiento general, "
+                   "Precision para evaluar la exactitud de predicciones positivas, Recall para medir la "
+                   "capacidad de detectar todos los casos positivos, y F1-Score como balance entre precisión y recall.")
+        
+        comparison_data = []
+        for model_name, res in results.items():
+            comparison_data.append({
+                "Modelo": model_name,
+                "Accuracy": f"{res['accuracy']:.4f}",
+                "Precision": f"{res['precision']:.4f}",
+                "Recall": f"{res['recall']:.4f}",
+                "F1-Score": f"{res['f1']:.4f}"
+            })
+        
+        comparison_df = pd.DataFrame(comparison_data)
+        st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+        
+        #Comparación visual de métricas
+        st.markdown("### Comparación Visual de Métricas")
+        metrics_data = []
+        for model_name, res in results.items():
+            metrics_data.extend([
+                {"Modelo": model_name, "Métrica": "Accuracy", "Valor": res['accuracy']},
+                {"Modelo": model_name, "Métrica": "Precision", "Valor": res['precision']},
+                {"Modelo": model_name, "Métrica": "Recall", "Valor": res['recall']},
+                {"Modelo": model_name, "Métrica": "F1-Score", "Valor": res['f1']},
+            ])
+        
+        metrics_df = pd.DataFrame(metrics_data)
+        fig_comparison = px.bar(
+            metrics_df,
+            x="Métrica",
+            y="Valor",
+            color="Modelo",
+            barmode="group",
+            title="Comparación de métricas por modelo",
+            color_discrete_sequence=px.colors.qualitative.Set2
+        )
+        fig_comparison.update_layout(yaxis_range=[0, 1])
+        st.plotly_chart(fig_comparison, use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("### Análisis Detallado por Modelo")
+        
+        selected_model = st.selectbox(
+            "Selecciona un modelo para ver análisis detallado",
+            list(results.keys()),
+            key="detailed_model"
+        )
+        
+        if selected_model:
+            res = results[selected_model]
+            st.markdown(f"#### Métricas por clase - {selected_model}")
+            report_df = pd.DataFrame(res["report"]).T.round(4)
+            st.dataframe(report_df, use_container_width=True)
+            
+            #Matriz de confusión
+            st.markdown("#### Matriz de Confusión")
+            st.caption("La matriz de confusión muestra las predicciones correctas e incorrectas por clase, "
+                      "permitiendo identificar confusiones entre clases específicas.")
+            
+            labels = sorted(res["y_test"].unique())
+            cm = confusion_matrix(res["y_test"], res["y_pred"], labels=labels)
+            
+            cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                cm_df = pd.DataFrame(
+                    cm,
+                    index=[f"Real {c}" for c in labels],
+                    columns=[f"Pred {c}" for c in labels]
+                )
+                fig_cm = px.imshow(
+                    cm_df,
+                    text_auto=True,
+                    color_continuous_scale="Blues",
+                    title="Matriz de Confusión (Conteos)",
+                    labels={"color": "Conteo"}
+                )
+                st.plotly_chart(fig_cm, use_container_width=True)
+            
+            with col2:
+                cm_norm_df = pd.DataFrame(
+                    cm_normalized,
+                    index=[f"Real {c}" for c in labels],
+                    columns=[f"Pred {c}" for c in labels]
+                )
+                fig_cm_norm = px.imshow(
+                    cm_norm_df,
+                    text_auto=".2%",
+                    color_continuous_scale="Blues",
+                    title="Matriz de Confusión (Normalizada)",
+                    labels={"color": "Proporción"}
+                )
+                st.plotly_chart(fig_cm_norm, use_container_width=True)
+            
+            #Curvas ROC
+            if res["y_pred_proba"] is not None:
+                st.markdown("#### Curvas ROC")
+                st.caption("Las curvas ROC evalúan el rendimiento del "
+                          "clasificador en diferentes umbrales, mostrando el balance entre tasa de verdaderos "
+                          "positivos y falsos positivos. El área bajo la curva (AUC) indica la capacidad "
+                          "discriminatoria del modelo (valores cercanos a 1 son mejores).")
+                
+                y_test_bin = label_binarize(res["y_test"], classes=labels)
+                n_classes = len(labels)
+                
+                fpr = dict()
+                tpr = dict()
+                roc_auc = dict()
+                
+                for i in range(n_classes):
+                    fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], res["y_pred_proba"][:, i])
+                    roc_auc[i] = auc(fpr[i], tpr[i])
+                
+                fig_roc = go.Figure()
+                
+                colors = px.colors.qualitative.Set2
+                for i in range(n_classes):
+                    fig_roc.add_trace(go.Scatter(
+                        x=fpr[i],
+                        y=tpr[i],
+                        mode='lines',
+                        name=f'Clase {labels[i]} (AUC = {roc_auc[i]:.3f})',
+                        line=dict(color=colors[i % len(colors)], width=2)
+                    ))
+                
+                fig_roc.add_trace(go.Scatter(
+                    x=[0, 1],
+                    y=[0, 1],
+                    mode='lines',
+                    name='Azar (AUC = 0.5)',
+                    line=dict(color='gray', width=2, dash='dash')
+                ))
+                
+                fig_roc.update_layout(
+                    title=f"Curvas ROC - {selected_model}",
+                    xaxis_title="Tasa de Falsos Positivos (FPR)",
+                    yaxis_title="Tasa de Verdaderos Positivos (TPR)",
+                    width=800,
+                    height=600,
+                    hovermode='closest'
+                )
+                
+                st.plotly_chart(fig_roc, use_container_width=True)
+                
+                st.markdown("**AUC Scores por clase:**")
+                auc_df = pd.DataFrame({
+                    "Clase": [f"Clase {labels[i]}" for i in range(n_classes)],
+                    "AUC Score": [f"{roc_auc[i]:.4f}" for i in range(n_classes)]
+                })
+                st.dataframe(auc_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("Las curvas ROC requieren probabilidades de predicción. Este modelo no las proporciona.")
+            
 
 def main() -> None:
     st.set_page_config(page_title="Industrial Fault Detection", layout="wide")

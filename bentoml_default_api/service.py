@@ -30,7 +30,8 @@ class PredictRequest(BaseModel):
 class PredictResponse(BaseModel):
     service_type: str
     model: str
-    pred: List[int] 
+    pred: List[int]
+    proba: Optional[List[List[float]]] = Field(default=None, description="Probabilidades de predicción (si están disponibles)") 
 
 
 class InfoResponse(BaseModel):
@@ -117,9 +118,19 @@ class FaultPredictionService:
         
         print(f"Using model: {model}")
         preds = model.predict(X)
+        
+        # Try to get probabilities if the model supports it
+        proba = None
+        try:
+            if hasattr(model, "predict_proba"):
+                proba = model.predict_proba(X)
+                proba = proba.tolist() if hasattr(proba, "tolist") else list(proba)
+        except Exception as e:
+            print(f"No se pudieron obtener probabilidades: {e}")
 
         return PredictResponse(
             service_type=req.api,
             model=req.model,
             pred=preds.tolist() if hasattr(preds, "tolist") else list(preds),
+            proba=proba,
         )
