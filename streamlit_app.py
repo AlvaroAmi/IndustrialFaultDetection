@@ -509,45 +509,45 @@ def render_prediction_tab() -> None:
         
 
     with st.container():
-            st.subheader("Entrada de Datos")
-            input_method = st.radio(
-                "Metodo de entrada:",
-                ("Subir CSV", "Subir JSON", "Manual"),
-                index=0,
-            )
+        st.subheader("Entrada de Datos")
+        input_method = st.radio(
+            "Metodo de entrada:",
+            ("Subir CSV", "Subir JSON", "Manual"),
+            index=0,
+        )
 
-            data = None
-            if input_method == "Manual":
-                st.markdown("### Introduccion Manual")
-                st.caption("Ingresa valores para cada sensor (usa decimales si es necesario).")
-                cols = st.columns(6)
-                values = []
-                for i, feat in enumerate(FEATURES):
-                    with cols[i % 6]:
-                        values.append(st.number_input(feat, value=0.0, format="%.6f", step=0.01))
-                data = values
-            elif input_method == "Subir CSV":
-                st.markdown("### Subir Archivo CSV")
-                st.caption("El archivo debe tener exactamente 36 columnas (una fila de datos).")
-                uploaded_csv = st.file_uploader("Selecciona un archivo CSV", type="csv")
-                if uploaded_csv is not None:
-                    df = pd.read_csv(uploaded_csv)
-                    if len(df.columns) == 36 and len(df) >= 1:
-                        data = df.iloc[0].values.tolist()
-                        st.success("Datos cargados correctamente del CSV.")
-                    else:
-                        st.error("El CSV debe tener 36 columnas y al menos 1 fila.")
-            elif input_method == "Subir JSON":
-                st.markdown("### Subir Archivo JSON")
-                st.caption("El JSON debe ser un objeto con 36 claves (ej: {\"Temperature\": 25.5, ...}).")
-                uploaded_json = st.file_uploader("Selecciona un archivo JSON", type="json")
-                if uploaded_json is not None:
-                    json_data = json.load(uploaded_json)
-                    if isinstance(json_data, dict) and len(json_data) == 36:
-                        data = [json_data.get(feature, 0.0) for feature in FEATURES]
-                        st.success("Datos cargados correctamente del JSON.")
-                    else:
-                        st.error("El JSON debe ser un objeto con exactamente 36 claves.")
+        data = None
+        if input_method == "Manual":
+            st.markdown("### Introduccion Manual")
+            st.caption("Ingresa valores para cada sensor (usa decimales si es necesario).")
+            cols = st.columns(6)
+            values = []
+            for i, feat in enumerate(FEATURES):
+                with cols[i % 6]:
+                    values.append(st.number_input(feat, value=0.0, format="%.6f", step=0.01))
+            data = values
+        elif input_method == "Subir CSV":
+            st.markdown("### Subir Archivo CSV")
+            st.caption("El archivo debe tener exactamente 36 columnas (una fila de datos).")
+            uploaded_csv = st.file_uploader("Selecciona un archivo CSV", type="csv")
+            if uploaded_csv is not None:
+                df = pd.read_csv(uploaded_csv)
+                if len(df.columns) == 36 and len(df) >= 1:
+                    data = df.iloc[0].values.tolist()
+                    st.success("Datos cargados correctamente del CSV.")
+                else:
+                    st.error("El CSV debe tener 36 columnas y al menos 1 fila.")
+        elif input_method == "Subir JSON":
+            st.markdown("### Subir Archivo JSON")
+            st.caption("El JSON debe ser un objeto con 36 claves (ej: {\"Temperature\": 25.5, ...}).")
+            uploaded_json = st.file_uploader("Selecciona un archivo JSON", type="json")
+            if uploaded_json is not None:
+                json_data = json.load(uploaded_json)
+                if isinstance(json_data, dict) and len(json_data) == 36:
+                    data = [json_data.get(feature, 0.0) for feature in FEATURES]
+                    st.success("Datos cargados correctamente del JSON.")
+                else:
+                    st.error("El JSON debe ser un objeto con exactamente 36 claves.")
 
     with st.container():
         st.subheader("Realizar Prediccion")
